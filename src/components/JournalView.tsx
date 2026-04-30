@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { formatDate, parseDate } from '@/lib/date'
 
 interface Entry {
   id: string
@@ -11,14 +12,18 @@ interface Entry {
   priority: string
   area?: string
   createdAt: string
+  movedFrom?: string | null
+  originalDate?: string | null
+  carryCount: number
+  order: number
 }
 
-type FilterType = 'all' | 'task' | 'event' | 'idea' | 'note' | 'done' | 'open'
+type FilterType = 'all' | 'open' | 'done' | 'carried'
 
 function getBullet(entry: Entry): string {
   if (entry.status === 'done') return '✓'
-  if (entry.status === 'moved') return '>'
-  if (entry.priority === 'high') return '🔥'
+  if (entry.movedFrom || entry.carryCount > 0 || entry.status === 'moved') return '>'
+  if (entry.priority === 'high') return '!'
   switch (entry.type) {
     case 'task': return '•'
     case 'event': return '○'
@@ -37,12 +42,9 @@ function formatTime(dateStr: string): string {
 
 const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'all', label: 'All' },
-  { key: 'task', label: 'Tasks' },
-  { key: 'event', label: 'Events' },
-  { key: 'idea', label: 'Ideas' },
-  { key: 'note', label: 'Notes' },
-  { key: 'done', label: 'Done' },
   { key: 'open', label: 'Open' },
+  { key: 'done', label: 'Done' },
+  { key: 'carried', label: 'Carried' },
 ]
 
 export default function JournalView() {
@@ -54,7 +56,7 @@ export default function JournalView() {
 
   async function fetchEntries() {
     try {
-      const res = await fetch('/api/entries')
+      const res = await fetch('/api/entries?type=task')
       if (res.ok) setEntries(await res.json())
     } catch (e) {
       console.error(e)
@@ -68,7 +70,8 @@ export default function JournalView() {
     if (filter === 'all') return true
     if (filter === 'done') return e.status === 'done'
     if (filter === 'open') return e.status === 'open' || e.status === 'moved'
-    return e.type === filter
+    if (filter === 'carried') return Boolean(e.movedFrom) || e.carryCount > 0 || e.status === 'moved'
+    return true
   })
 
   // Group by date - each entry appears ONCE under its effective date
@@ -80,20 +83,24 @@ export default function JournalView() {
   }, {} as Record<string, Entry[]>)
 
   const sortedDates = Object.keys(grouped).sort((a, b) =>
-    new Date(b).getTime() - new Date(a).getTime()
+    parseDate(b).getTime() - parseDate(a).getTime()
   )
 
   function formatDateHeader(dateStr: string): string {
-    const date = new Date(dateStr)
+    const date = parseDate(dateStr)
     const today = new Date()
     const yesterday = new Date(today)
     yesterday.setDate(yesterday.getDate() - 1)
-    const todayStr = today.toLocaleDateString('en-CA')
-    const yesterdayStr = yesterday.toLocaleDateString('en-CA')
+    const todayStr = formatDate(today)
+    const yesterdayStr = formatDate(yesterday)
 
     if (dateStr === todayStr) return 'Today'
     if (dateStr === yesterdayStr) return 'Yesterday'
     return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+  }
+
+  function formatCarryDate(dateStr: string): string {
+    return parseDate(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
   if (loading) return <div className="text-center py-12 text-secondary">Loading...</div>
@@ -135,7 +142,7 @@ export default function JournalView() {
             </div>
             <div>
               {grouped[dateStr]
-                .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                .sort((a, b) => a.order - b.order || new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
                 .map(entry => (
                   <div
                     key={entry.id}
@@ -144,6 +151,11 @@ export default function JournalView() {
                     <span className="text-base w-5 text-center">{getBullet(entry)}</span>
                     <span className={`flex-1 text-sm ${entry.status === 'done' ? 'line-through text-secondary' : 'text-primary'}`}>
                       {entry.content}
+                      {(entry.movedFrom || entry.carryCount > 0) && (
+                        <span className="ml-2 text-xs text-blue-500">
+                          from {formatCarryDate(entry.movedFrom || entry.originalDate || entry.date)}
+                        </span>
+                      )}
                     </span>
                     <span className="text-xs text-secondary/60 font-mono">{formatTime(entry.createdAt)}</span>
                   </div>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma, today } from '@/lib/db'
+import { prisma, normalizeHabitName } from '@/lib/db'
 
 // GET /api/habits - list all habits with ALL logs (for 52-week graph)
 export async function GET() {
@@ -20,9 +20,30 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const { name } = await request.json()
-    const habit = await prisma.habit.create({
-      data: { name },
+    const trimmedName = typeof name === 'string' ? name.trim() : ''
+    if (!trimmedName) {
+      return NextResponse.json({ error: 'Habit name is required' }, { status: 400 })
+    }
+
+    const normalizedName = normalizeHabitName(trimmedName)
+    const existingHabits = await prisma.habit.findMany({
+      select: { id: true, name: true, active: true },
     })
+    const existing = existingHabits.find(habit => normalizeHabitName(habit.name) === normalizedName)
+
+    if (existing?.active) {
+      return NextResponse.json({ error: 'Habit already exists' }, { status: 409 })
+    }
+
+    const habit = existing
+      ? await prisma.habit.update({
+          where: { id: existing.id },
+          data: { active: true, name: trimmedName },
+        })
+      : await prisma.habit.create({
+          data: { name: trimmedName },
+        })
+
     return NextResponse.json(habit)
   } catch (error) {
     return NextResponse.json({ error: 'Failed to create habit' }, { status: 500 })
@@ -51,7 +72,15 @@ export async function PATCH(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const { id } = await request.json()
-    await prisma.habit.delete({ where: { id } })
+    if (typeof id !== 'string' || !id) {
+      return NextResponse.json({ error: 'Habit id is required' }, { status: 400 })
+    }
+
+    await prisma.$transaction([
+      prisma.habitLog.deleteMany({ where: { habitId: id } }),
+      prisma.habit.delete({ where: { id } }),
+    ])
+
     return NextResponse.json({ success: true })
   } catch (error) {
     return NextResponse.json({ error: 'Failed to delete habit' }, { status: 500 })

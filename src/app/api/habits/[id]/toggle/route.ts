@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma, today } from '@/lib/db'
+import { prisma } from '@/lib/db'
+import { today } from '@/lib/date'
 
 // POST /api/habits/[id]/toggle - toggle habit for a specific date (default: today)
 export async function POST(
@@ -9,7 +10,12 @@ export async function POST(
   try {
     const body = await request.json()
     const habitId = params.id
-    const date = body.date || today()
+    const todayStr = today()
+    const date = typeof body.date === 'string' && body.date ? body.date : todayStr
+
+    if (date > todayStr) {
+      return NextResponse.json({ error: 'Future habit dates cannot be edited' }, { status: 400 })
+    }
 
     const existing = await prisma.habitLog.findUnique({
       where: { habitId_date: { habitId, date } },

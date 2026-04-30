@@ -15,7 +15,13 @@ model Entry {
   status    String   @default("open") // open | done | moved | dropped
   priority  String   @default("medium") // high | medium | low
   area      String?  // work | build | life
+  movedFrom String?
+  originalDate String?
+  carryCount Int      @default(0)
+  order     Int      @default(0)
   createdAt DateTime @default(now())
+
+  @@index([date, order])
 }
 
 model Habit {
@@ -33,7 +39,7 @@ model HabitLog {
   date      String   // YYYY-MM-DD
   completed Boolean  @default(false)
   createdAt DateTime @default(now())
-  habit     Habit    @relation(fields: [habitId], references: [id])
+  habit     Habit    @relation(fields: [habitId], references: [id], onDelete: Cascade)
 
   @@unique([habitId, date])
 }
