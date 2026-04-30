@@ -1,0 +1,32 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: ./bullet-mvp
+        run: npm ci
+
+      - name: Build
+        working-directory: ./bullet-mvp
+        run: npm run build
+
+      - name: Restart app
+        run: |
+          pkill -f "next dev" || true
+          cd /root/.openclaw/workspace/bullet-mvp
+          npm run dev &
