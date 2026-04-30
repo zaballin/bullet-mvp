@@ -11,11 +11,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          path: bullet-mvp
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: bullet-mvp/package-lock.json
 
       - name: Install dependencies
         working-directory: ./bullet-mvp
@@ -25,8 +29,10 @@ jobs:
         working-directory: ./bullet-mvp
         run: npm run build
 
-      - name: Restart app
-        run: |
-          pkill -f "next dev" || true
-          cd /root/.openclaw/workspace/bullet-mvp
-          npm run dev &
+      - name: Stop existing app
+        run: pkill -f "next dev -p 3001" || true
+
+      - name: Start app
+        working-directory: ./bullet-mvp
+        run: npm run dev &
+        shell: bash
