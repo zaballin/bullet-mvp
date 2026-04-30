@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { formatDate, parseDate } from '@/lib/date'
+import { formatDate, normalizeDateString, parseDate } from '@/lib/date'
 
 interface Entry {
   id: string
@@ -100,7 +100,11 @@ export default function JournalView() {
   }
 
   function formatCarryDate(dateStr: string): string {
-    return parseDate(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    const normalized = normalizeDateString(dateStr)
+    if (!normalized) return dateStr
+    const parsed = parseDate(normalized)
+    if (Number.isNaN(parsed.getTime())) return normalized
+    return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
   if (loading) return <div className="text-center py-12 text-secondary">Loading...</div>
