@@ -1,0 +1,75 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  overscroll-behavior: none;
+}
+
+body {
+  background-color: #FAFAF9;
+  color: #1C1917;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Journal-style: no cards, no shadows, clean typography */
+.journal-entry {
+  @apply flex items-center gap-3 py-3 px-4;
+}
+
+.journal-entry + .journal-entry {
+  @apply border-t border-gray-100;
+}
+
+/* Swipe gestures */
+.swipe-row {
+  @apply transition-transform duration-150;
+}
+
+/* Hide scrollbar but keep functionality */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Touch targets */
+button, a, [role="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Symbol styling */
+.bullet-symbol {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Bottom input bar spacing */
+.bottom-input-bar {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+/* Filter pills */
+.filter-pill {
+  @apply px-4 py-2 rounded-full text-sm whitespace-nowrap transition-colors;
+}
+
+/* Habit dot grid */
+.habit-dot {
+  @apply w-5 h-5 rounded-full;
+}
+
+/* Timeline date headers */
+.date-header {
+  @apply px-4 py-2 bg-bg sticky top-0;
+}
