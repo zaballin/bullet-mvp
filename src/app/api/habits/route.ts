@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma, normalizeHabitName } from '@/lib/db'
+import { normalizeDateString } from '@/lib/date'
 
 // GET /api/habits - list all habits with ALL logs (for 52-week graph)
 export async function GET() {
@@ -13,7 +14,24 @@ export async function GET() {
     },
   })
 
-  return NextResponse.json(habits)
+  const normalizedHabits = habits.map(habit => {
+    const logsByDate = new Map<string, typeof habit.logs[number]>()
+    for (const log of habit.logs) {
+      const normalizedDate = normalizeDateString(log.date)
+      if (!normalizedDate) continue
+      const current = logsByDate.get(normalizedDate)
+      if (!current || current.createdAt < log.createdAt) {
+        logsByDate.set(normalizedDate, { ...log, date: normalizedDate })
+      }
+    }
+
+    return {
+      ...habit,
+      logs: Array.from(logsByDate.values()).sort((a, b) => b.date.localeCompare(a.date)),
+    }
+  })
+
+  return NextResponse.json(normalizedHabits)
 }
 
 // POST /api/habits - create new habit

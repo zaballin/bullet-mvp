@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { formatDate, getTomorrowDate, shiftDate } from '@/lib/date'
+import { formatDate, getTomorrowDate, normalizeDateString, parseDate, shiftDate } from '@/lib/date'
 import { parseEntryInput } from '@/lib/entry-parsing'
 
 interface Entry {
@@ -114,8 +114,11 @@ function DraggableRow({
   }
 
   function formatCarryDate(date: string): string {
-    const [year, month, day] = date.split('-').map(Number)
-    return new Date(year, month - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    const normalized = normalizeDateString(date)
+    if (!normalized) return date
+    const parsed = parseDate(normalized)
+    if (Number.isNaN(parsed.getTime())) return normalized
+    return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
   const types = ['task', 'event', 'idea', 'note']

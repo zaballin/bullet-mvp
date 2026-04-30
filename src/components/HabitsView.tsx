@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { formatDate, parseDate, shiftDate, today } from '@/lib/date'
+import { formatDate, normalizeDateString, parseDate, shiftDate, today } from '@/lib/date'
 
 interface HabitLog {
   id: string
@@ -58,6 +58,12 @@ function ContributionSquare({ date, completed, isToday }: {
 
 function ContributionGraph({ habit }: { habit: Habit }) {
   const todayStr = today()
+  const normalizedCompletedDays = new Set(
+    habit.logs
+      .filter(log => log.completed)
+      .map(log => normalizeDateString(log.date))
+      .filter((date): date is string => Boolean(date))
+  )
 
   function get52Weeks(): string[] {
     const days: string[] = []
@@ -84,7 +90,7 @@ function ContributionGraph({ habit }: { habit: Habit }) {
   }
 
   function isCompleted(date: string): boolean {
-    return habit.logs.some(log => log.date === date && log.completed)
+    return normalizedCompletedDays.has(date)
   }
 
   const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -239,7 +245,7 @@ export default function HabitsView() {
   }
 
   function isCompleted(habit: Habit, date: string): boolean {
-    return habit.logs.some(log => log.date === date && log.completed)
+    return habit.logs.some(log => normalizeDateString(log.date) === date && log.completed)
   }
 
   function getStreak(habit: Habit): number {

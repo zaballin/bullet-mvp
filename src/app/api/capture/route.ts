@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma, getStatusConfirmMessage, normalizeHabitName } from '@/lib/db'
+import { ensureSqliteSchema, prisma, getStatusConfirmMessage, normalizeHabitName } from '@/lib/db'
 import { today } from '@/lib/date'
 import { parseEntryInput } from '@/lib/entry-parsing'
 
@@ -7,6 +7,7 @@ import { parseEntryInput } from '@/lib/entry-parsing'
 // Can be called internally or via external tools
 export async function POST(request: NextRequest) {
   try {
+    await ensureSqliteSchema()
     const body = await request.json()
     const { message } = body
 
@@ -48,12 +49,17 @@ export async function POST(request: NextRequest) {
       }
     } else {
       // Create an entry
-      const entry = await prisma.entry.create({
+      const result = await prisma.entry.aggregate({
+        where: { date: today() },
+        _max: { order: true },
+      })
+      await prisma.entry.create({
         data: {
           type: parsed.type,
           content: parsed.content,
           date: today(),
           priority: parsed.priority || 'medium',
+          order: (result._max.order ?? -1) + 1,
         },
       })
       replyMessage = getStatusConfirmMessage(parsed.type, parsed.content)

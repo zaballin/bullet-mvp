@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/db'
-import { today } from '@/lib/date'
+import { ensureSqliteSchema, prisma } from '@/lib/db'
+import { normalizeDateString, today } from '@/lib/date'
 import { isEntryPriority, isEntryStatus, isEntryType, parseEntryInput } from '@/lib/entry-parsing'
 
 async function getNextOrder(date: string): Promise<number> {
@@ -14,14 +14,16 @@ async function getNextOrder(date: string): Promise<number> {
 
 // GET /api/entries - list entries with optional filters
 export async function GET(request: NextRequest) {
+  await ensureSqliteSchema()
   const searchParams = request.nextUrl.searchParams
-  const date = searchParams.get('date')
+  const requestedDate = searchParams.get('date')
   const type = searchParams.get('type')
 
   const where: Record<string, unknown> = {}
 
-  if (date && date !== 'all') {
-    where.date = date
+  if (requestedDate && requestedDate !== 'all') {
+    const normalizedDate = normalizeDateString(requestedDate)
+    where.date = normalizedDate || requestedDate
   }
 
   if (type) {
@@ -37,15 +39,21 @@ export async function GET(request: NextRequest) {
     ],
   })
 
-  return NextResponse.json(entries)
+  return NextResponse.json(entries.map(entry => ({
+    ...entry,
+    date: normalizeDateString(entry.date) || entry.date,
+    movedFrom: entry.movedFrom ? normalizeDateString(entry.movedFrom) || entry.movedFrom : null,
+    originalDate: entry.originalDate ? normalizeDateString(entry.originalDate) || entry.originalDate : null,
+  })))
 }
 
 // POST /api/entries - create new entry
 export async function POST(request: NextRequest) {
   try {
+    await ensureSqliteSchema()
     const body = await request.json()
     const { type, content, priority, date: entryDate, area } = body
-    const resolvedDate = typeof entryDate === 'string' && entryDate ? entryDate : today()
+    const resolvedDate = typeof entryDate === 'string' && entryDate ? normalizeDateString(entryDate) || today() : today()
 
     let parsedEntry
     if (typeof type === 'string') {
@@ -96,6 +104,7 @@ export async function POST(request: NextRequest) {
 // PATCH /api/entries - update entry
 export async function PATCH(request: NextRequest) {
   try {
+    await ensureSqliteSchema()
     const body = await request.json()
     const { id, status, priority, area, type, date, movedFrom, originalDate, carryCount, reorderIds } = body
 
@@ -168,9 +177,14 @@ export async function PATCH(request: NextRequest) {
       if (typeof date !== 'string' || !date) {
         return NextResponse.json({ error: 'Invalid entry date' }, { status: 400 })
       }
-      updateData.date = date
-      if (date !== existingEntry.date) {
-        updateData.order = await getNextOrder(date)
+      const normalizedDate = normalizeDateString(date)
+      if (!normalizedDate) {
+        return NextResponse.json({ error: 'Invalid entry date' }, { status: 400 })
+      }
+
+      updateData.date = normalizedDate
+      if (normalizedDate !== existingEntry.date) {
+        updateData.order = await getNextOrder(normalizedDate)
       }
     }
 
@@ -189,6 +203,7 @@ export async function PATCH(request: NextRequest) {
 // DELETE /api/entries - delete entry
 export async function DELETE(request: NextRequest) {
   try {
+    await ensureSqliteSchema()
     const { id } = await request.json()
     if (typeof id !== 'string' || !id) {
       return NextResponse.json({ error: 'Entry id is required' }, { status: 400 })
