@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client'
 import cron from 'node-cron'
-import { today } from './db'
+import { formatDate, today } from './date'
 
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient }
 export const prisma = globalForPrisma.prisma || new PrismaClient()
@@ -34,29 +34,31 @@ export async function sendWhatsAppMessage(to: string, body: string) {
 
 export async function sendDailyReminder() {
   const todayStr = today()
-  
+  const priorityRank = { high: 0, medium: 1, low: 2 } as const
   const openTasks = await prisma.entry.findMany({
     where: { 
       date: todayStr, 
       type: 'task', 
       status: 'open' 
     },
-    orderBy: { priority: 'asc' },
-    take: 5,
+    orderBy: [{ createdAt: 'asc' }],
   })
+  const sortedOpenTasks = openTasks
+    .sort((a, b) => priorityRank[a.priority as keyof typeof priorityRank] - priorityRank[b.priority as keyof typeof priorityRank])
+    .slice(0, 5)
 
   const myPhone = process.env.MY_PHONE || '+41799651071'
 
-  if (openTasks.length === 0) {
+  if (sortedOpenTasks.length === 0) {
     return sendWhatsAppMessage(myPhone, 
       '📋 End of day check:\n\nNo pending tasks today. Nice work! 🎉\n\nReply with "habit: [name]" to add a new habit.'
     )
   }
 
-  const topTasks = openTasks.slice(0, 3).map((t, i) => `• ${t.content}`).join('\n')
+  const topTasks = sortedOpenTasks.slice(0, 3).map((t) => `• ${t.content}`).join('\n')
   
   return sendWhatsAppMessage(myPhone, 
-    `📋 End of day check:\n\nUnfinished tasks (${openTasks.length}):\n${topTasks}\n\nReply "move [n]" to reschedule, "drop [n]" to discard, or "habit: [name]" to add a habit.`
+    `📋 End of day check:\n\nUnfinished tasks (${sortedOpenTasks.length}):\n${topTasks}\n\nReply "move [n]" to reschedule, "drop [n]" to discard, or "habit: [name]" to add a habit.`
   )
 }
 
@@ -65,7 +67,7 @@ export async function sendWeeklyReview() {
   weekAgo.setDate(weekAgo.getDate() - 7)
   
   const recentEntries = await prisma.entry.findMany({
-    where: { date: { gte: weekAgo.toISOString().split('T')[0] } },
+    where: { date: { gte: formatDate(weekAgo) } },
     orderBy: { date: 'desc' },
   })
 

@@ -1,6 +1,8 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { formatDate, getTomorrowDate, shiftDate } from '@/lib/date'
+import { parseEntryInput } from '@/lib/entry-parsing'
 
 interface Entry {
   id: string
@@ -11,31 +13,15 @@ interface Entry {
   priority: string
   area?: string
   createdAt: string
-}
-
-// Parse input prefix into type/priority
-// . → task  .! → priority task  / → note  ! → idea
-function parseInput(text: string): { type: string; priority: string; content: string } {
-  const trimmed = text.trim()
-  
-  if (trimmed.startsWith('/ ')) {
-    return { type: 'note', priority: 'medium', content: trimmed.slice(2) }
-  }
-  if (trimmed.startsWith('! ')) {
-    return { type: 'idea', priority: 'medium', content: trimmed.slice(2) }
-  }
-  if (trimmed.startsWith('.! ')) {
-    return { type: 'task', priority: 'high', content: trimmed.slice(3) }
-  }
-  if (trimmed.startsWith('. ')) {
-    return { type: 'task', priority: 'medium', content: trimmed.slice(2) }
-  }
-  return { type: 'task', priority: 'medium', content: trimmed }
+  movedFrom?: string | null
+  originalDate?: string | null
+  carryCount: number
+  order: number
 }
 
 function getBullet(entry: Entry): string {
   if (entry.status === 'done') return '✓'
-  if (entry.status === 'moved') return '>'
+  if (entry.movedFrom || entry.status === 'moved') return '>'
   if (entry.priority === 'high') return '!'
   switch (entry.type) {
     case 'task': return '•'
@@ -47,27 +33,27 @@ function getBullet(entry: Entry): string {
 }
 
 function formatDateForDisplay(date: Date): { day: string; full: string } {
-  const today = new Date()
-  const yesterday = new Date(today)
+  const todayDate = new Date()
+  const yesterday = new Date(todayDate)
   yesterday.setDate(yesterday.getDate() - 1)
-  
-  const dateStr = date.toLocaleDateString('en-CA')
-  const todayStr = today.toLocaleDateString('en-CA')
-  const yesterdayStr = yesterday.toLocaleDateString('en-CA')
-  
+
+  const dateStr = formatDate(date)
+  const todayStr = formatDate(todayDate)
+  const yesterdayStr = formatDate(yesterday)
+
   if (dateStr === todayStr) {
-    return { day: 'Today', full: today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) }
+    return { day: 'Today', full: todayDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) }
   }
+
   if (dateStr === yesterdayStr) {
     return { day: 'Yesterday', full: yesterday.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) }
   }
-  return { 
+
+  return {
     day: date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
-    full: date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+    full: date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }),
   }
 }
-
-import { today, getTomorrowDate } from '@/lib/db'
 
 interface DraggableRowProps {
   entry: Entry
@@ -80,27 +66,42 @@ interface DraggableRowProps {
   onDragStart: (index: number) => void
   onDragOver: (index: number) => void
   onDrop: (index: number) => void
+  onSortPointerStart: (index: number, event: React.PointerEvent<HTMLDivElement>) => void
+  onSortPointerMove: (event: React.PointerEvent<HTMLDivElement>) => void
+  onSortPointerEnd: (event: React.PointerEvent<HTMLDivElement>) => void
   isDragging: boolean
   isDragOver: boolean
 }
 
-function DraggableRow({ entry, index, onToggle, onMove, onUnmove, onTypeChange, onPriorityToggle, onDragStart, onDragOver, onDrop, isDragging, isDragOver }: DraggableRowProps) {
+function DraggableRow({
+  entry,
+  index,
+  onToggle,
+  onMove,
+  onUnmove,
+  onTypeChange,
+  onPriorityToggle,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onSortPointerStart,
+  onSortPointerMove,
+  onSortPointerEnd,
+  isDragging,
+  isDragOver,
+}: DraggableRowProps) {
   const [swipeX, setSwipeX] = useState(0)
   const [startX, setStartX] = useState(0)
   const [showTypeMenu, setShowTypeMenu] = useState(false)
 
   const isDone = entry.status === 'done'
-  const isMoved = entry.status === 'moved'
-  // Allow toggle (right swipe) for open items, undo move (left swipe) for moved items
-  const canAct = !isDone
+  const isCarried = Boolean(entry.movedFrom) || entry.status === 'moved' || entry.carryCount > 0
 
   function handleTouchStart(e: React.TouchEvent) {
-    if (!canAct) return
     setStartX(e.touches[0].clientX)
   }
 
   function handleTouchMove(e: React.TouchEvent) {
-    if (!canAct) return
     const diff = e.touches[0].clientX - startX
     if (diff > 0) setSwipeX(Math.min(diff, 80))
     else setSwipeX(Math.max(diff, -80))
@@ -108,87 +109,100 @@ function DraggableRow({ entry, index, onToggle, onMove, onUnmove, onTypeChange, 
 
   function handleTouchEnd() {
     if (swipeX > 60) onToggle()
-    else if (swipeX < -60) {
-      if (isMoved) onUnmove()
-      else onMove()
-    }
+    else if (swipeX < -60) onMove()
     setSwipeX(0)
+  }
+
+  function formatCarryDate(date: string): string {
+    const [year, month, day] = date.split('-').map(Number)
+    return new Date(year, month - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
   const types = ['task', 'event', 'idea', 'note']
 
   return (
     <>
-      <div 
+      <div
+        data-entry-index={index}
         className={`relative overflow-hidden transition-opacity ${isDragging ? 'opacity-50' : ''} ${isDragOver ? 'bg-accent/10' : ''}`}
-        draggable
-        onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(index) }}
         onDragOver={(e) => { e.preventDefault(); onDragOver(index) }}
         onDrop={(e) => { e.preventDefault(); onDrop(index) }}
       >
-        {/* Swipe backgrounds */}
         <div className="absolute inset-y-0 left-0 flex items-center pl-4">
           {swipeX > 0 && <span className="text-success text-lg">✓</span>}
         </div>
         <div className="absolute inset-y-0 right-0 flex items-center gap-1 pr-2">
           {swipeX < 0 && (
-            <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xl font-medium">›</div>
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-xl font-medium text-blue-600">›</div>
           )}
         </div>
 
-        {/* Row */}
         <div
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
           onContextMenu={(e) => { e.preventDefault(); setShowTypeMenu(true) }}
-          className={`relative flex items-center gap-1 py-2 px-4 transition-transform ${isDone || isMoved ? 'opacity-50' : ''}`}
+          className={`relative flex items-center gap-1 px-4 py-2 transition-transform ${isDone ? 'opacity-50' : ''}`}
           style={{ transform: `translateX(${swipeX}px)` }}
         >
-          {/* Drag handle */}
-          <div className="w-6 text-secondary/30 cursor-grab active:cursor-grabbing flex items-center justify-center mr-1">
+          <div
+            className="mr-1 flex w-7 cursor-grab touch-none items-center justify-center text-secondary/40 active:cursor-grabbing"
+            draggable
+            onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(index) }}
+            onPointerDown={(e) => onSortPointerStart(index, e)}
+            onPointerMove={onSortPointerMove}
+            onPointerUp={onSortPointerEnd}
+            onPointerCancel={onSortPointerEnd}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchMove={(e) => e.stopPropagation()}
+          >
             ⋮⋮
           </div>
 
-          {/* Bullet */}
-          <span className={`text-base w-5 text-center ${isMoved ? 'text-blue-400' : ''}`}>
+          <span className={`w-5 text-center text-base ${isCarried ? 'text-blue-400' : ''}`}>
             {getBullet(entry)}
           </span>
-          
-          {/* Content */}
-          <span className={`flex-1 text-sm ${isDone || isMoved ? 'line-through text-secondary' : 'text-primary'}`}>
-            {entry.content}
-          </span>
-          
-          {/* Moved indicator */}
-          {isMoved && <span className="text-xs text-blue-400">› tomorrow</span>}
-          
-          {/* Done indicator */}
+
+          <div className="min-w-0 flex-1">
+            <span className={`block truncate text-sm ${isDone ? 'text-secondary line-through' : 'text-primary'}`}>
+              {entry.content}
+            </span>
+            {isCarried && (
+              <button
+                type="button"
+                onClick={onUnmove}
+                className="mt-0.5 text-xs text-blue-500"
+                style={{ minHeight: 0, minWidth: 0 }}
+              >
+                from {formatCarryDate(entry.movedFrom || entry.originalDate || entry.date)} · undo
+              </button>
+            )}
+          </div>
+
           {isDone && <span className="text-xs text-success">✓</span>}
         </div>
       </div>
 
-      {/* Type menu */}
       {showTypeMenu && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" onClick={() => setShowTypeMenu(false)}>
-          <div className="bg-surface rounded-2xl p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <p className="text-sm text-secondary mb-4">Change type</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowTypeMenu(false)}>
+          <div className="rounded-2xl bg-surface p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <p className="mb-4 text-sm text-secondary">Change type</p>
             <div className="flex gap-3">
               {types.map(t => (
                 <button
                   key={t}
                   onClick={() => { onTypeChange(t); setShowTypeMenu(false) }}
-                  className={`w-14 h-14 rounded-xl flex flex-col items-center justify-center transition-colors ${entry.type === t ? 'bg-accent text-white' : 'bg-gray-100 text-primary'}`}
+                  className={`flex h-14 w-14 flex-col items-center justify-center rounded-xl transition-colors ${entry.type === t ? 'bg-accent text-white' : 'bg-gray-100 text-primary'}`}
                 >
                   <span className="text-xl">{t === 'task' ? '•' : t === 'event' ? '○' : t === 'note' ? '–' : '💡'}</span>
-                  <span className="text-xs mt-1">{t}</span>
+                  <span className="mt-1 text-xs">{t}</span>
                 </button>
               ))}
             </div>
             {entry.type === 'task' && (
               <button
                 onClick={() => { onPriorityToggle(); setShowTypeMenu(false) }}
-                className="w-full mt-4 py-3 text-center text-sm rounded-xl bg-gray-100 text-primary"
+                className="mt-4 w-full rounded-xl bg-gray-100 py-3 text-center text-sm text-primary"
               >
                 {entry.priority === 'high' ? 'Remove ! priority' : 'Add ! priority'}
               </button>
@@ -205,84 +219,189 @@ export default function TodayView() {
   const [loading, setLoading] = useState(true)
   const [inputText, setInputText] = useState('')
   const [adding, setAdding] = useState(false)
-  // Initialize as null to avoid SSR/client hydration mismatch
+  const [error, setError] = useState<string | null>(null)
   const [currentDate, setCurrentDate] = useState<Date | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Drag state
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
 
-  // Set date only on client to avoid hydration mismatch
   useEffect(() => {
     setCurrentDate(new Date())
   }, [])
 
   const dateInfo = currentDate ? formatDateForDisplay(currentDate) : { day: '...', full: '...' }
-  const currentDateStr = currentDate ? currentDate.toLocaleDateString('en-CA') : ''
-  const tomorrowStr = getTomorrowDate()
+  const currentDateStr = currentDate ? formatDate(currentDate) : ''
 
   useEffect(() => {
-    if (currentDateStr) fetchEntries()
+    if (currentDateStr) {
+      fetchEntries()
+    }
   }, [currentDateStr])
+
+  async function readJson<T>(res: Response): Promise<T> {
+    const data = await res.json()
+    if (!res.ok) {
+      throw new Error(typeof data.error === 'string' ? data.error : 'Request failed')
+    }
+    return data as T
+  }
+
+  function replaceEntry(nextEntry: Entry) {
+    setEntries(currentEntries =>
+      currentEntries.map(currentEntry => currentEntry.id === nextEntry.id ? nextEntry : currentEntry)
+    )
+  }
 
   async function fetchEntries() {
     if (!currentDateStr) return
+    setLoading(true)
+    setError(null)
     try {
       const res = await fetch(`/api/entries?date=${currentDateStr}`)
-      setEntries(await res.json())
-    } catch (e) { console.error(e) }
-    finally { setLoading(false) }
+      setEntries(await readJson<Entry[]>(res))
+    } catch (e) {
+      console.error(e)
+      setError(e instanceof Error ? e.message : 'Failed to load entries')
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function addEntry(text: string) {
     if (!text.trim()) return
     setAdding(true)
+    setError(null)
+
     try {
-      const { type, priority, content } = parseInput(text)
+      const parsed = parseEntryInput(text)
+      if (parsed.type === 'habit') {
+        setError('Use the Habits tab to create habits.')
+        return
+      }
+
       const res = await fetch('/api/entries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, priority, content, date: currentDateStr }),
+        body: JSON.stringify({ type: parsed.type, priority: parsed.priority, content: parsed.content, date: currentDateStr }),
       })
-      setEntries([...entries, await res.json()])
+
+      const entry = await readJson<Entry>(res)
+      setEntries(currentEntries => [...currentEntries, entry])
       setInputText('')
-    } finally { setAdding(false) }
+    } catch (e) {
+      console.error(e)
+      setError(e instanceof Error ? e.message : 'Failed to add entry')
+    } finally {
+      setAdding(false)
+    }
   }
 
   async function toggleComplete(entry: Entry) {
-    const newStatus = entry.status === 'done' ? 'open' : 'done'
-    await fetch('/api/entries', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: entry.id, status: newStatus }) })
-    setEntries(entries.map(e => e.id === entry.id ? { ...e, status: newStatus } : e))
+    setError(null)
+    try {
+      const newStatus = entry.status === 'done' ? 'open' : 'done'
+      const res = await fetch('/api/entries', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: entry.id, status: newStatus }),
+      })
+      replaceEntry(await readJson<Entry>(res))
+    } catch (e) {
+      console.error(e)
+      setError(e instanceof Error ? e.message : 'Failed to update entry')
+    }
   }
 
   async function unmoveEntry(entry: Entry) {
-    await fetch('/api/entries', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: entry.id, status: 'open' }) })
-    setEntries(entries.map(e => e.id === entry.id ? { ...e, status: 'open' } : e))
+    setError(null)
+    try {
+      const restoredDate = entry.movedFrom || shiftDate(entry.date, -1)
+      const nextCarryCount = Math.max((entry.carryCount || 0) - 1, 0)
+      const res = await fetch('/api/entries', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: entry.id,
+          status: 'open',
+          date: restoredDate,
+          movedFrom: nextCarryCount > 0 ? shiftDate(restoredDate, -1) : null,
+          originalDate: nextCarryCount > 0 ? entry.originalDate || restoredDate : null,
+          carryCount: nextCarryCount,
+        }),
+      })
+      const updatedEntry = await readJson<Entry>(res)
+      if (updatedEntry.date === currentDateStr) {
+        replaceEntry(updatedEntry)
+      } else {
+        setEntries(currentEntries => currentEntries.filter(currentEntry => currentEntry.id !== entry.id))
+      }
+    } catch (e) {
+      console.error(e)
+      setError(e instanceof Error ? e.message : 'Failed to restore entry')
+    }
   }
 
   async function moveEntry(entry: Entry) {
-    const tomorrowDate = getTomorrowDate()
-    await fetch('/api/entries', { 
-      method: 'PATCH', 
-      headers: { 'Content-Type': 'application/json' }, 
-      body: JSON.stringify({ id: entry.id, status: 'moved', date: tomorrowDate }) 
-    })
-    setEntries(entries.map(e => e.id === entry.id ? { ...e, status: 'moved', date: tomorrowDate } : e))
+    setError(null)
+    try {
+      const tomorrowDate = getTomorrowDate(entry.date)
+      const nextCarryCount = (entry.carryCount || 0) + 1
+      const res = await fetch('/api/entries', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: entry.id,
+          status: 'open',
+          date: tomorrowDate,
+          movedFrom: entry.date,
+          originalDate: entry.originalDate || entry.movedFrom || entry.date,
+          carryCount: nextCarryCount,
+        }),
+      })
+      const updatedEntry = await readJson<Entry>(res)
+      if (updatedEntry.date === currentDateStr) {
+        replaceEntry(updatedEntry)
+      } else {
+        setEntries(currentEntries => currentEntries.filter(currentEntry => currentEntry.id !== entry.id))
+      }
+    } catch (e) {
+      console.error(e)
+      setError(e instanceof Error ? e.message : 'Failed to move entry')
+    }
   }
 
   async function changeType(entry: Entry, type: string) {
-    await fetch('/api/entries', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: entry.id, type }) })
-    setEntries(entries.map(e => e.id === entry.id ? { ...e, type } : e))
+    setError(null)
+    try {
+      const res = await fetch('/api/entries', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: entry.id, type }),
+      })
+      replaceEntry(await readJson<Entry>(res))
+    } catch (e) {
+      console.error(e)
+      setError(e instanceof Error ? e.message : 'Failed to change type')
+    }
   }
 
   async function togglePriority(entry: Entry) {
-    const newP = entry.priority === 'high' ? 'medium' : 'high'
-    await fetch('/api/entries', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: entry.id, priority: newP }) })
-    setEntries(entries.map(e => e.id === entry.id ? { ...e, priority: newP } : e))
+    setError(null)
+    try {
+      const newPriority = entry.priority === 'high' ? 'medium' : 'high'
+      const res = await fetch('/api/entries', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: entry.id, priority: newPriority }),
+      })
+      replaceEntry(await readJson<Entry>(res))
+    } catch (e) {
+      console.error(e)
+      setError(e instanceof Error ? e.message : 'Failed to change priority')
+    }
   }
 
-  // Drag handlers
   function handleDragStart(index: number) {
     setDragIndex(index)
   }
@@ -293,13 +412,58 @@ export default function TodayView() {
     }
   }
 
-  function handleDrop(index: number) {
+  function handleSortPointerStart(index: number, event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setDragIndex(index)
+    setDragOverIndex(index)
+  }
+
+  function handleSortPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    if (dragIndex === null) return
+    event.preventDefault()
+    const target = document
+      .elementFromPoint(event.clientX, event.clientY)
+      ?.closest<HTMLElement>('[data-entry-index]')
+    const nextIndex = Number(target?.dataset.entryIndex)
+    if (Number.isInteger(nextIndex)) {
+      setDragOverIndex(nextIndex)
+    }
+  }
+
+  function handleSortPointerEnd(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (dragIndex !== null && dragOverIndex !== null) {
+      handleDrop(dragOverIndex)
+    } else {
+      setDragIndex(null)
+      setDragOverIndex(null)
+    }
+  }
+
+  async function handleDrop(index: number) {
     if (dragIndex !== null && dragIndex !== index) {
       const newEntries = [...entries]
       const [dragged] = newEntries.splice(dragIndex, 1)
       newEntries.splice(index, 0, dragged)
       setEntries(newEntries)
+
+      try {
+        const res = await fetch('/api/entries', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reorderIds: newEntries.map(entry => entry.id) }),
+        })
+        await readJson<{ success: true }>(res)
+      } catch (e) {
+        console.error(e)
+        setError(e instanceof Error ? e.message : 'Failed to save order')
+        fetchEntries()
+      }
     }
+
     setDragIndex(null)
     setDragOverIndex(null)
   }
@@ -322,42 +486,44 @@ export default function TodayView() {
     setCurrentDate(new Date())
   }
 
-  const isToday = currentDate ? (currentDateStr === new Date().toLocaleDateString('en-CA')) : false
-  const openCount = entries.filter(e => e.type === 'task' && e.status !== 'done' && e.status !== 'dropped').length
+  const isToday = currentDate ? currentDateStr === formatDate(new Date()) : false
+  const openCount = entries.filter(entry => entry.type === 'task' && entry.status === 'open').length
 
-  if (loading) return <div className="text-center py-12 text-secondary">Loading...</div>
+  if (loading) return <div className="py-12 text-center text-secondary">Loading...</div>
 
   return (
     <div className="min-h-screen pb-24">
-      {/* Day Navigation Header */}
-      <div className="px-4 pt-6 pb-2">
+      <div className="px-4 pb-2 pt-6">
         <div className="flex items-center justify-between">
-          <button onClick={goToPrevDay} className="w-10 h-10 rounded-full bg-surface border border-gray-200 flex items-center justify-center text-xl text-primary hover:bg-gray-50">
+          <button onClick={goToPrevDay} className="flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 bg-surface text-xl text-primary hover:bg-gray-50">
             ‹
           </button>
           <div className="text-center">
             <button onClick={goToToday} className="text-xl font-semibold text-primary hover:text-accent">
               {dateInfo.day}
             </button>
-            <p className="text-xs text-secondary mt-0.5">{dateInfo.full}</p>
+            <p className="mt-0.5 text-xs text-secondary">{dateInfo.full}</p>
           </div>
-          <button 
-            onClick={goToNextDay} 
-            className="w-10 h-10 rounded-full border border-gray-200 text-primary hover:bg-gray-50 flex items-center justify-center text-xl"
+          <button
+            onClick={goToNextDay}
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 text-xl text-primary hover:bg-gray-50"
           >
             ›
           </button>
         </div>
-        {openCount > 0 && <p className="text-center text-sm text-secondary mt-1">{openCount} to do</p>}
+        {!isToday && (
+          <p className="mt-1 text-center text-xs text-secondary">Tap the title to jump back to today.</p>
+        )}
+        {openCount > 0 && <p className="mt-1 text-center text-sm text-secondary">{openCount} to do</p>}
+        {error && <p className="mt-2 text-center text-sm text-red-600">{error}</p>}
       </div>
 
-      {/* Entries List */}
       <div className="border-t border-gray-100">
         {entries.length === 0 ? (
           <div className="px-4 py-16 text-center text-secondary">
-            <p className="text-3xl mb-2">✨</p>
+            <p className="mb-2 text-3xl">✨</p>
             <p className="text-sm">Nothing logged</p>
-            <p className="text-xs mt-1 text-secondary/70">Add below or via WhatsApp</p>
+            <p className="mt-1 text-xs text-secondary/70">Add below or via WhatsApp</p>
           </div>
         ) : (
           entries.map((entry, index) => (
@@ -368,11 +534,14 @@ export default function TodayView() {
               onToggle={() => toggleComplete(entry)}
               onMove={() => moveEntry(entry)}
               onUnmove={() => unmoveEntry(entry)}
-              onTypeChange={(t) => changeType(entry, t)}
+              onTypeChange={(type) => changeType(entry, type)}
               onPriorityToggle={() => togglePriority(entry)}
               onDragStart={handleDragStart}
               onDragOver={handleDragOver}
               onDrop={handleDrop}
+              onSortPointerStart={handleSortPointerStart}
+              onSortPointerMove={handleSortPointerMove}
+              onSortPointerEnd={handleSortPointerEnd}
               isDragging={dragIndex === index}
               isDragOver={dragOverIndex === index}
             />
@@ -380,21 +549,19 @@ export default function TodayView() {
         )}
       </div>
 
-      {/* Bottom Input */}
-      <div className="fixed bottom-20 left-0 right-0 px-4 py-3 bg-bg/95 backdrop-blur-sm border-t border-gray-100">
-        <div className="max-w-md mx-auto">
-          {/* Input hint */}
-          <div className="flex gap-4 text-xs text-secondary/60 mb-1.5 px-1">
+      <div className="fixed bottom-20 left-0 right-0 border-t border-gray-100 bg-bg/95 px-4 py-3 backdrop-blur-sm">
+        <div className="mx-auto max-w-md">
+          <div className="mb-1.5 flex gap-4 px-1 text-xs text-secondary/60">
             <span>. task</span>
             <span>.! urgent</span>
             <span>/ note</span>
             <span>! idea</span>
           </div>
-          <div className="flex items-center gap-2 bg-surface rounded-2xl px-3 py-2 shadow-sm border border-gray-100">
-            <button 
+          <div className="flex items-center gap-2 rounded-2xl border border-gray-100 bg-surface px-3 py-2 shadow-sm">
+            <button
               onClick={() => { inputRef.current?.focus(); if (inputText.trim()) addEntry(inputText) }}
               disabled={adding}
-              className="w-8 h-8 rounded-full bg-accent text-white flex items-center justify-center text-lg font-medium shrink-0"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-lg font-medium text-white"
             >
               +
             </button>
@@ -405,10 +572,10 @@ export default function TodayView() {
               onChange={e => setInputText(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addEntry(inputText) } }}
               placeholder="What do you want to log?"
-              className="flex-1 py-2 bg-transparent text-primary placeholder:text-secondary text-sm focus:outline-none"
+              className="flex-1 bg-transparent py-2 text-sm text-primary placeholder:text-secondary focus:outline-none"
             />
             {inputText.trim() && (
-              <button onClick={() => addEntry(inputText)} disabled={adding} className="text-accent text-sm font-medium shrink-0">
+              <button onClick={() => addEntry(inputText)} disabled={adding} className="shrink-0 text-sm font-medium text-accent">
                 {adding ? '...' : 'Add'}
               </button>
             )}
